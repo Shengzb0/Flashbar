@@ -75,4 +75,4 @@ powershell -ExecutionPolicy Bypass -File test_flash.ps1 -Seconds 3
 
 ## License
 
-基于 [GPL-3.0](LICENSE) 协议开源。"# Flashbar" 
+基于 [GPL-3.0](LICENSE) 协议开源。
