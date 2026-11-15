@@ -39,6 +39,7 @@ FlashBar 监听系统的 shell 通知（`HSHELL_FLASH`），有程序请求关�
 
 - **测试提醒**：弹出一个最小化的测试窗口并让它闪烁（打开 5 秒后、或 60 秒无人理会时自动关闭）
 - **开机自启**：写入 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `FlashBar` 值，默认不开启。在任务管理器「启动」页禁用后菜单显示为未勾选，再勾选会同时清除禁用标记
+- **实验功能**：接管系统通知等，见下文「实验功能：接管系统通知」
 - **退出**
 
 左键单击托盘图标：如有待处理提醒，重新展开胶囊 8 秒。
@@ -46,6 +47,41 @@ FlashBar 监听系统的 shell 通知（`HSHELL_FLASH`），有程序请求关�
 ### 配套 Windhawk 模组
 
 [`windhawk/taskbar-ignore-flash.wh.cpp`](windhawk/taskbar-ignore-flash.wh.cpp)：可选装。它 hook 任务栏（`taskbar.dll` 的 `CTaskBand::v_WndProc`），丢弃 `HSHELL_FLASH` 通知，让原生任务栏对闪烁完全无反应（不变橙、自动隐藏时不弹出），提醒完全交给 FlashBar。禁用模组即恢复原生行为。
+
+### 实验功能：接管系统通知
+
+托盘菜单 →「实验功能」→ 勾选「接管系统通知」：FlashBar 读取通知中心里新到的系统通知（应用发的 Toast，以及经 WNS 推送来的通知，最终都会进通知中心），用同一个橙色胶囊显示，并关掉这些应用的系统横幅。
+
+工作方式：
+
+- **监听**：通过 `UserNotificationListener` 每 0.5 秒读一次通知中心，按通知 Id 比对新增与消失（非打包程序订阅它的变化事件会失败，只能轮询）。开启时已有的通知只记录、不弹出。
+- **代替横幅**：给接管的应用写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\<应用 ID>\ShowBanner = 0`，与「设置 → 系统 → 通知 → 某应用 → 显示通知横幅」是同一个开关：通知仍进通知中心，只是不在右下角弹出。改之前先把原值备份到 `%LOCALAPPDATA%\FlashBar\toast-apps.txt`。
+- **还原**：关闭本功能、从托盘退出、注销 / 关机时还原；异常退出后下次启动按备份对账。只还原仍为 0 的值，期间你在系统设置里自己改过的保持不动。
+
+| 场景 | 行为 |
+| -------- | ------------------------------------------------------------ |
+| 新通知 | 与闪烁提醒一样展开 8 秒：左侧应用图标，文字为「应用名 · 标题：正文」，之后收成细线 |
+| 左键点击 | 切到该应用已打开的窗口；没有窗口就从「所有应用」启动它（单实例程序会调出自己的窗口）；都不行则打开通知中心 |
+| 右键点击 | 只从胶囊移除，通知中心里的原通知保留 |
+| 自动消失 | 在通知中心点掉 / 清除了这条通知（或应用自己撤回），或通知到达后你切到了该应用 |
+| 既闪烁又发通知 | 聊天软件常常两样都做：同一应用的闪烁并入它的通知，只显示一条 |
+
+「实验功能」子菜单：
+
+- **接管系统通知**：总开关。若显示「（未授权）」，到「设置 → 隐私和安全性 → 通知」打开通知访问权限后，取消再重新勾选即可。
+- **已接管的应用**：勾选 = 由 FlashBar 显示（系统横幅关闭）；取消 = 交还系统（恢复横幅，FlashBar 不显示）。本来就关了横幅的应用默认不勾选。
+- **发送测试通知**：以 Windows PowerShell 的身份发一条测试通知（FlashBar 自己没有通知身份）；点掉或右键忽略后会自动从通知中心删除。
+- **系统通知设置… / 通知访问权限…**：打开对应的 Windows 设置页。
+
+始终交给 Windows、不接管的：系统组件（应用 ID 以 `Windows.`、`Microsoft.Windows.` 开头，如自动播放、蓝牙、Windows 更新、安全中心）和「时钟」的闹钟 / 计时器。
+
+注意事项：
+
+- 每个应用被接管前的第一条通知，系统横幅仍会弹一次；开启功能时通知中心里已有通知的应用会立刻接管。
+- 通知上的按钮（快速回复、接听来电、闹钟稍后提醒）只能在通知中心里用；胶囊左键只能打开应用，不能定位到具体那条消息。需要接电话的应用（Teams、手机连接等）建议交还系统。
+- 应用以静默方式放进通知中心、本来不弹横幅的通知，也会被 FlashBar 显示。
+- 读取其他应用的通知对非打包程序不是微软正式支持的用法，后续 Windows 更新可能改变行为；出问题时托盘菜单会标出「（出错）」并自动还原横幅，详情见日志。
+- 按应用关横幅（`ShowBanner`）依据的是 Windows 11 的设置项，Windows 10 上未验证。
 
 ### 编译
 
@@ -67,6 +103,14 @@ powershell -ExecutionPolicy Bypass -File test_flash.ps1 -Seconds 3
 
 脚本会创建标题为「FlashBar测试」的最小化窗口并让它闪烁，检查胶囊窗口（标题 `FlashBarPill`）是否出现，再激活测试窗口检查胶囊是否消失，最后输出 `RESULT: PASS / FAIL`。如果测试前胶囊已可见（有其他待处理提醒），改为检查日志并跳过消失检查。
 
+实验功能自测（先在托盘开启「接管系统通知」，用 Windows PowerShell 5.1 运行）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File test_toast.ps1
+```
+
+脚本以 Windows PowerShell 的身份发一条通知，检查 FlashBar 日志出现接管记录、胶囊出现，再把这条通知从通知中心删掉，检查胶囊同步消失。
+
 ### 项目结构
 
 ```
@@ -75,11 +119,12 @@ FlashBar/
 ├── build.bat               # csc.exe 一键编译（x64）
 ├── app.manifest            # win32 清单
 ├── test_flash.ps1          # 自动化自测脚本
+├── test_toast.ps1          # 实验功能（接管系统通知）自测脚本
 ├── src/
 │   ├── Program.cs          # 入口，单实例互斥锁 + 全局异常日志
-│   ├── AppController.cs    # 中枢：连接 shell 通知、列表、胶囊与托盘
+│   ├── AppController.cs    # 中枢：连接 shell 通知、系统通知（实验）、列表、胶囊与托盘
 │   ├── ShellHookWindow.cs  # 隐藏窗口，注册 RegisterShellHookWindow 接收 SHELLHOOK
-│   ├── AttentionList.cs    # 待处理提醒列表（15 秒内的重复闪烁视为同一次）
+│   ├── AttentionList.cs    # 待处理提醒列表（15 秒内的重复闪烁视为同一次；含接管的系统通知）
 │   ├── PillForm.cs         # 胶囊窗口（展开态/细线态状态机）
 │   ├── PillLayout.cs       # 胶囊位置计算（显示器跟踪、避开 Seelen Dock）
 │   ├── PillRender.cs       # 胶囊绘制
@@ -88,6 +133,11 @@ FlashBar/
 │   ├── WinActivate.cs      # 显示器信息与窗口激活
 │   ├── WinUtil.cs          # 窗口/进程工具函数
 │   ├── TestWindow.cs       # 「测试提醒」演示窗口
+│   ├── ToastWatcher.cs     # 实验：轮询通知中心（UserNotificationListener），新增 / 消失事件
+│   ├── ToastBanner.cs      # 实验：按应用关闭 / 还原系统通知横幅（ShowBanner），备份与对账
+│   ├── ToastApps.cs        # 实验：通知来源应用的名称 / 图标 / exe，匹配窗口与左键切换
+│   ├── WinRT.cs            # 运行时反射调用 WinRT（不依赖 Windows SDK）
+│   ├── Settings.cs         # settings.ini 读写
 │   ├── NativeMethods.cs    # Win32 P/Invoke 声明
 │   └── Log.cs              # 日志
 └── windhawk/
@@ -96,7 +146,7 @@ FlashBar/
 
 ### 日志
 
-`%LOCALAPPDATA%\FlashBar\flashbar.log`，超过 512KB 轮转为 `flashbar.log.1`（只保留一份）。
+`%LOCALAPPDATA%\FlashBar\flashbar.log`，超过 512KB 轮转为 `flashbar.log.1`（只保留一份）。同目录还有 `settings.ini`（设置）和 `toast-apps.txt`（实验功能接管的应用及横幅原值备份）。日志只记录通知来自哪个应用，不记录通知内容。
 
 ### 使用该app时的建议
 
@@ -104,7 +154,7 @@ FlashBar/
 
 - **把托盘橙点当「待处理收件箱」**：橙点右下角的数字就是没处理的提醒数；下班前看一眼归零即可。左键单击托盘图标可随时重新展开胶囊。
 - **演示/会议前先清列表**：全屏演示时胶囊会自动隐藏，但提醒还在积累；如果用窗口化（非全屏）演示，胶囊会一直显示，建议先左键逐个处理掉或右键忽略。
-- **勿扰模式管不住它**：FlashBar 不走 Windows 通知中心，系统的勿扰/焦点助手对胶囊无效——想清净只能先把提醒处理完。
+- **勿扰模式管不住它**：FlashBar 不走 Windows 通知中心，系统的勿扰/焦点助手对胶囊无效——想清净只能先把提醒处理完。开启「接管系统通知」后，接管来的通知同样不受勿扰影响。
 
 #### Windows 设置建议
 
@@ -136,10 +186,10 @@ FlashBar/
 ### 卸载
 
 1. 如果勾过「开机自启」，先在托盘菜单取消勾选（或删除注册表 `HKCU\...\Run` 下的 `FlashBar` 值）
-2. 托盘菜单 → 退出
+2. 托盘菜单 → 退出（开启过「接管系统通知」的话，退出时会把各应用的通知横幅还原）
 3. 删除 FlashBar 所在的整个文件夹和 `%LOCALAPPDATA%\FlashBar`（日志）
 
-程序不写其他注册表项、不装服务，删完即干净。
+除实验功能运行期间会改动各应用的「显示通知横幅」（退出时还原），程序不写其他注册表项、不装服务，删完即干净。
 
 ### 已知限制
 
@@ -148,6 +198,7 @@ FlashBar/
 - 胶囊放在工作区底部；检测到 Seelen UI（`seelen*.exe`）贴底的可见窗口时放到它上方，每秒刷新。Dock 自动隐藏时胶囊回到底部，弹出后约 1 秒才让开
 - 全屏判断：前台窗口正好铺满胶囊所在屏，或系统报告独占全屏/演示模式；无边框「最大化」不算全屏
 - 以管理员身份运行的程序窗口，普通权限的 FlashBar 可能无法把它切到前台（Windows 权限隔离；解决方法见上文「Windows 设置建议」）
+- 实验功能「接管系统通知」的限制见上文对应小节
 
 ## License
 
